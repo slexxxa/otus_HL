@@ -1,0 +1,137 @@
+basePath: /
+definitions:
+  main.User:
+    properties:
+      biography:
+        example: Music, photo and popcorn
+        type: string
+      birthdate:
+        example: 11-12-1988
+        type: string
+      city:
+        example: SPB
+        type: string
+      email:
+        example: test1@pupkin.ru
+        type: string
+      first_name:
+        example: Aleksandr
+        type: string
+      gender:
+        example: M
+        type: string
+      password:
+        example: test1
+        type: string
+      phone:
+        example: "123456789"
+        type: string
+      second_name:
+        example: Pupkin
+        type: string
+      username:
+        example: test1
+        type: string
+    type: object
+host: 127.0.0.1:8000
+info:
+  contact: {}
+  description: Otus HighLoad
+  title: Auth Service API
+  version: "1.0"
+paths:
+  /:
+    get:
+      responses:
+        "200":
+          description: OK
+      summary: Hello endpoint
+      tags:
+      - system
+  /health:
+    get:
+      responses:
+        "200":
+          description: OK
+      summary: Health check
+      tags:
+      - system
+  /login:
+    post:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+      security:
+      - BasicAuth: []
+      summary: Login user
+      tags:
+      - auth
+  /user/delete/{username}:
+    delete:
+      parameters:
+      - description: Username
+        in: path
+        name: username
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+      security:
+      - BearerAuth: []
+      summary: Delete user
+      tags:
+      - user
+  /user/get/{username}:
+    get:
+      parameters:
+      - description: Username
+        in: path
+        name: username
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/main.User'
+      security:
+      - BearerAuth: []
+      summary: Get user
+      tags:
+      - user
+  /user/register:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: User
+        in: body
+        name: user
+        required: true
+        schema:
+          $ref: '#/definitions/main.User'
+      responses:
+        "201":
+          description: Created
+      security:
+      - BearerAuth: []
+      summary: Create user
+      tags:
+      - user
+securityDefinitions:
+  BasicAuth:
+    type: basic
+  BearerAuth:
+    in: header
+    name: token
+    type: apiKey
+swagger: "2.0"

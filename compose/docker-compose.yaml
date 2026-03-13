@@ -24,5 +24,12 @@ services:
       timeout: 5s
       retries: 5
 
+  main:
+    image: docker.io/otus/hl:v0.0.1
+    container_name: main
+    restart: unless-stopped
+
+    ports:
+      - "8000:8000"
 volumes:
   postgres_data:
