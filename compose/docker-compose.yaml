@@ -25,7 +25,7 @@ services:
       retries: 5
 
   main:
-    image: docker.io/otus/hl:v0.0.1
+    image: docker.io/slexxa/otus_hl_main
     container_name: main
     restart: unless-stopped
 
