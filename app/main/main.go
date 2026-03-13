@@ -1,7 +1,6 @@
 // @title Auth Service API
 // @version 1.0
 // @description Otus HighLoad
-// @host 127.0.0.1:8000
 // @BasePath /
 // @securityDefinitions.apikey BearerAuth
 // @in header

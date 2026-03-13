@@ -33,7 +33,6 @@ definitions:
         example: test1
         type: string
     type: object
-host: 127.0.0.1:8000
 info:
   contact: {}
   description: Otus HighLoad
