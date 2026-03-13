@@ -12,4 +12,4 @@ CREATE TABLE users (
    biography varchar(200),
    city varchar(20),
    phone varchar(20) );
-INSERT INTO users (username, password) VALUES ('admin','admin');
+INSERT INTO users (username, password, email, phone) VALUES ('admin','admin','admin@admin.com','123456789');
