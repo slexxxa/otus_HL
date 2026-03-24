@@ -159,6 +159,46 @@ const docTemplate = `{
                     }
                 }
             }
+        },
+        "/user/search": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "tags": [
+                    "user"
+                ],
+                "summary": "Search users",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "First name",
+                        "name": "first_name",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Last name",
+                        "name": "last_name",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/main.User"
+                            }
+                        }
+                    }
+                }
+            }
         }
     },
     "definitions": {
@@ -188,6 +228,9 @@ const docTemplate = `{
                 "gender": {
                     "type": "string",
                     "example": "M"
+                },
+                "id": {
+                    "type": "string"
                 },
                 "password": {
                     "type": "string",

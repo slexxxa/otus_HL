@@ -20,6 +20,8 @@ definitions:
       gender:
         example: M
         type: string
+      id:
+        type: string
       password:
         example: test1
         type: string
@@ -124,6 +126,31 @@ paths:
       security:
       - BearerAuth: []
       summary: Create user
+      tags:
+      - user
+  /user/search:
+    get:
+      parameters:
+      - description: First name
+        in: query
+        name: first_name
+        required: true
+        type: string
+      - description: Last name
+        in: query
+        name: last_name
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/main.User'
+            type: array
+      security:
+      - BearerAuth: []
+      summary: Search users
       tags:
       - user
 securityDefinitions:
