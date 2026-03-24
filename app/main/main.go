@@ -37,16 +37,17 @@ var (
 )
 
 type User struct {
+	ID        string
 	Username  string `json:"username" example:"test1"`
 	Password  string `json:"password,omitempty" example:"test1"`
 	FirstName string `json:"first_name" example:"Aleksandr"`
 	LastName  string `json:"second_name" example:"Pupkin"`
-	Email     string `json:"email" example:"test1@pupkin.ru"`
-	Birthdate string `json:"birthdate" example:"11-12-1988"`
-	Gender    string `json:"gender" example:"M"`
-	Biography string `json:"biography" example:"Music, photo and popcorn"`
-	City      string `json:"city" example:"SPB"`
-	Phone     string `json:"phone" example:"123456789"`
+	Email     string `json:"email,omitempty" example:"test1@pupkin.ru"`
+	Birthdate string `json:"birthdate,omitempty" example:"11-12-1988"`
+	Gender    string `json:"gender,omitempty" example:"M"`
+	Biography string `json:"biography,omitempty" example:"Music, photo and popcorn"`
+	City      string `json:"city,omitempty" example:"SPB"`
+	Phone     string `json:"phone,omitempty" example:"123456789"`
 }
 
 type Claims struct {
@@ -263,6 +264,76 @@ func health(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(`{"status":"OK"}`))
 }
 
+// searchUser godoc
+// @Summary Search users
+// @Tags user
+// @Security BearerAuth
+// @Param first_name query string true "First name"
+// @Param last_name query string true "Last name"
+// @Success 200 {array} User
+// @Router /user/search [get]
+func searchUser(w http.ResponseWriter, r *http.Request) {
+
+	firstName := r.URL.Query().Get("first_name")
+	lastName := r.URL.Query().Get("last_name")
+
+	if firstName == "" || lastName == "" {
+		http.Error(w, "first_name and last_name required", http.StatusBadRequest)
+		return
+	}
+
+	rows, err := db.Query(`
+		SELECT
+		    id,
+			username,
+			firstname,
+			lastname,
+			COALESCE(email, ''),
+			COALESCE(birthdate, ''),
+			COALESCE(biography, ''),
+			COALESCE(city, ''),
+			COALESCE(phone, '')
+		FROM users
+		WHERE firstname ILIKE $1
+		  AND lastname ILIKE $2
+		LIMIT 50`,
+		firstName+"%",
+		lastName+"%",
+	)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	defer rows.Close()
+
+	result := []User{}
+
+	for rows.Next() {
+		var u User
+
+		err := rows.Scan(
+			&u.ID,
+			&u.Username,
+			&u.FirstName,
+			&u.LastName,
+			&u.Email,
+			&u.Birthdate,
+			&u.Biography,
+			&u.City,
+			&u.Phone,
+		)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+
+		result = append(result, u)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
+}
+
 // login godoc
 // @Summary Login user
 // @Tags auth
@@ -322,6 +393,7 @@ func main() {
 	r.HandleFunc("/login", login)
 	r.HandleFunc("/user/get/{username}", tokenRequired(getUser)).Methods("GET")
 	r.HandleFunc("/user/delete/{username}", tokenRequired(deleteUser)).Methods("DELETE")
+	r.HandleFunc("/user/search", tokenRequired(searchUser)).Methods("GET")
 	//	r.HandleFunc("/user/update/{username}", tokenRequired(updateUser)).Methods("PUT")
 	r.HandleFunc("/user/register", tokenRequired(createUser)).Methods("POST")
 
@@ -331,3 +403,4 @@ func main() {
 	log.Println("Server started :8000")
 	log.Fatal(http.ListenAndServe(":8000", r))
 }
+
