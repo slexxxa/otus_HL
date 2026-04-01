@@ -14,6 +14,14 @@ CREATE TABLE users (
    phone varchar(50) );
 INSERT INTO users (username, password, email, phone) VALUES ('admin','admin','admin@admin.com','123456789');
 
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+CREATE INDEX idx_users_firstname_trgm
+ON users USING gin (firstname gin_trgm_ops);
+
+CREATE INDEX idx_users_lastname_trgm
+ON users USING gin (lastname gin_trgm_ops);
+
 CREATE TEMP TABLE users_import (
     full_name TEXT,
     birthdate DATE,
