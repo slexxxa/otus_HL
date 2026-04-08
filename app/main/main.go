@@ -31,7 +31,8 @@ import (
 )
 
 var (
-	db         *sql.DB
+	dbWrite    *sql.DB
+	dbRead     *sql.DB
 	secretKey  = []byte("jndsifhvusdkhbfjdsfbgljdbgfvljdsgvjld")
 	billingURL string
 )
@@ -66,24 +67,38 @@ func env(key, def string) string {
 }
 
 func initDB() {
-	connStr := fmt.Sprintf(
+	writeConn := fmt.Sprintf(
 		"postgres://%s:%s@%s:%s/%s",
 		env("PGUSER", "postgres"),
 		env("PGPASSWORD", "12345678"),
-		env("PGHOST", "10.169.44.8"),
-		env("PGPORT", "5432"),
+		env("PGHOST_WRITE", "10.169.44.8"),
+		env("PGPORT_WRITE", "5432"),
+		env("PGDBNAME", "auth"),
+	)
+
+	readConn := fmt.Sprintf(
+		"postgres://%s:%s@%s:%s/%s",
+		env("PGUSER", "postgres"),
+		env("PGPASSWORD", "12345678"),
+		env("PGHOST_READ", "10.169.44.8"),
+		env("PGPORT_READ", "5433"),
 		env("PGDBNAME", "auth"),
 	)
 
 	var err error
-	db, err = sql.Open("pgx", connStr)
+	dbWrite, err = sql.Open("pgx", writeConn)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	dbRead, err = sql.Open("pgx", readConn)
 	if err != nil {
 		log.Fatal(err)
 	}
 }
 
 func getProfile(username string) (*User, error) {
-	row := db.QueryRow(`
+	row := dbRead.QueryRow(`
 		SELECT password, email, phone
 		FROM users WHERE username=$1`, username)
 
@@ -144,7 +159,7 @@ func getUser(w http.ResponseWriter, r *http.Request) {
 
 	username := mux.Vars(r)["username"]
 
-	row := db.QueryRow(`
+	row := dbRead.QueryRow(`
 		SELECT username,firstname,lastname,email,phone,biography,birthdate,city,gender
 		FROM users WHERE username=$1`, username)
 
@@ -175,7 +190,7 @@ func deleteUser(w http.ResponseWriter, r *http.Request) {
 
 	username := mux.Vars(r)["username"]
 
-	_, err := db.Exec(`DELETE FROM users WHERE username=$1`, username)
+	_, err := dbWrite.Exec(`DELETE FROM users WHERE username=$1`, username)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
@@ -190,7 +205,7 @@ func updateUser(w http.ResponseWriter, r *http.Request) {
 	var u User
 	json.NewDecoder(r.Body).Decode(&u)
 
-	_, err := db.Exec(`
+	_, err := dbWrite.Exec(`
 		UPDATE users SET
 			firstname=$1,
 			lastname=$2,
@@ -224,7 +239,7 @@ func createUser(w http.ResponseWriter, r *http.Request) {
 	var u User
 	json.NewDecoder(r.Body).Decode(&u)
 
-	_, err := db.Exec(`
+	_, err := dbWrite.Exec(`
 		INSERT INTO users
 		(username,password,firstname,lastname,email,phone,biography,birthdate,city,gender)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
@@ -282,7 +297,7 @@ func searchUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := db.Query(`
+	rows, err := dbRead.Query(`
 		SELECT
 		    id,
 			username,
