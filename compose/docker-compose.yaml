@@ -1,41 +1,98 @@
 version: "3.9"
 
 services:
-  postgres:
-    image: postgres:17
-    container_name: postgres17
-    restart: unless-stopped
+#      - ./initdb:/docker-entrypoint-initdb.d
+#      - ./people:/people
+    main:
+        image: docker.io/slexxa/otus_hl_main:v0.0.5
+        container_name: main
+        restart: unless-stopped
+        environment:
+          PGHOST_WRITE: "haproxy"
+          PGPORT_WRITE: "5000"
+          PGHOST_READ: "haproxy"
+          PGPORT_READ: "5001"
+          PGUSER: "postgres"
+          PGPASSWORD: "postgres"
+          PGDBNAME: "auth"
 
-    environment:
-      POSTGRES_DB: postgres
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: 12345678
+        ports:
+          - "8000:8000"
 
-    ports:
-      - "5432:5432"
+    etcd1: &etcd
+        image: docker.io/slexxa/patroni:v260409
+        environment:
+            ETCD_LISTEN_PEER_URLS: http://0.0.0.0:2380
+            ETCD_LISTEN_CLIENT_URLS: http://0.0.0.0:2379
+            ETCD_INITIAL_CLUSTER: etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
+            ETCD_INITIAL_CLUSTER_STATE: new
+            ETCD_INITIAL_CLUSTER_TOKEN: tutorial
+            ETCD_UNSUPPORTED_ARCH: arm64
+        container_name: etcd1
+        hostname: etcd1
+        command: etcd --name etcd1 --initial-advertise-peer-urls http://etcd1:2380
 
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./initdb:/docker-entrypoint-initdb.d
-      - ./people:/people
+    etcd2:
+        <<: *etcd
+        container_name: etcd2
+        hostname: etcd2
+        command: etcd --name etcd2 --initial-advertise-peer-urls http://etcd2:2380
 
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
+    etcd3:
+        <<: *etcd
+        container_name: etcd3
+        hostname: etcd3
+        command: etcd --name etcd3 --initial-advertise-peer-urls http://etcd3:2380
 
-  main:
-    image: docker.io/slexxa/otus_hl_main:v0.0.5
-    container_name: main
-    restart: unless-stopped
-    environment:
-      PGHOST_WRITE: "10.169.44.8"
-      PGPORT_WRITE: "5432"
-      PGHOST_READ: "10.169.44.8"
-      PGPORT_READ: "5432"
+    haproxy:
+        image: docker.io/slexxa/patroni:v260409
+        env_file: patroni.env
+        hostname: haproxy
+        container_name: haproxy
+        ports:
+            - "5000:5000"
+            - "5001:5001"
+        command: haproxy
+        environment: &haproxy_env
+            ETCDCTL_ENDPOINTS: http://etcd1:2379,http://etcd2:2379,http://etcd3:2379
+            PATRONI_ETCD3_HOSTS: "'etcd1:2379','etcd2:2379','etcd3:2379'"
+            PATRONI_SCOPE: demo
 
-    ports:
-      - "8000:8000"
+    patroni1:
+        image: docker.io/slexxa/patroni:v260409
+        env_file: patroni.env
+        hostname: patroni1
+        container_name: patroni1
+        environment:
+            <<: *haproxy_env
+            PATRONI_NAME: patroni1
+
+    patroni2:
+        image: docker.io/slexxa/patroni:v260409
+        env_file: patroni.env
+        hostname: patroni2
+        container_name: patroni2
+        environment:
+            <<: *haproxy_env
+            PATRONI_NAME: patroni2
+
+    patroni3:
+        image: docker.io/slexxa/patroni:v260409
+        env_file: patroni.env
+        hostname: patroni3
+        container_name: patroni3
+        environment:
+            <<: *haproxy_env
+            PATRONI_NAME: patroni3
+    migrate:
+        image: postgres:17
+        container_name: migrate
+        depends_on:
+          - patroni1
+        volumes:
+          - ./initdb:/initdb
+          - ./people:/people
+        entrypoint: ["/bin/bash", "/initdb/wait-and-init.sh"]
+        restart: "no"
 volumes:
   postgres_data:
