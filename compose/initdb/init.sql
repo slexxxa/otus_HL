@@ -46,3 +46,49 @@ SELECT
     birthdate,
     city
 FROM users_import;
+
+
+CREATE TABLE posts (
+    id SERIAL PRIMARY KEY,
+    username varchar(50) NOT NULL,
+    text TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT now()
+);
+
+CREATE INDEX idx_posts_user_created
+ON posts (username, created_at DESC);
+
+CREATE TEMP TABLE posts_import (
+    text TEXT
+);
+
+\copy posts_import FROM '/people/posts.txt';
+
+WITH users_array AS (
+    SELECT array_agg(username) AS users FROM users
+)
+INSERT INTO posts (
+    username,
+    text,
+    created_at
+)
+SELECT
+    users[(r.val * (array_length(users, 1) - 1) + 1)::int],
+    p.text,
+    now() - (r.val * interval '30 days')
+FROM posts_import p
+CROSS JOIN users_array
+CROSS JOIN LATERAL (
+    SELECT random() + length(p.text)*0 AS val
+) r;
+
+CREATE TABLE friends (
+    username TEXT NOT NULL,
+    friendname TEXT NOT NULL
+);
+
+CREATE INDEX idx_friends_user
+ON friends(username);
+
+ALTER TABLE friends
+ADD CONSTRAINT unique_friend UNIQUE (username, friendname);

@@ -15,9 +15,18 @@ services:
           PGUSER: "postgres"
           PGPASSWORD: "postgres"
           PGDBNAME: "auth"
+          REDISCONN: "redis:6379"
 
         ports:
           - "8000:8000"
+
+    redis:
+        image: redis:6.2.6-alpine
+        container_name: redis
+        ports:
+          - "6379:6379"
+        volumes:
+          - redis-data:/data
 
     etcd1: &etcd
         image: docker.io/slexxa/patroni:v260409
@@ -96,3 +105,4 @@ services:
         restart: "no"
 volumes:
   postgres_data:
+  redis-data:
