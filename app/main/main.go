@@ -18,6 +18,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,8 +28,11 @@ import (
 	"github.com/gorilla/mux"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/redis/go-redis/v9"
 	httpSwagger "github.com/swaggo/http-swagger"
 )
+
+var rdb *redis.Client
 
 var (
 	dbWrite    *sql.DB
@@ -51,6 +55,13 @@ type User struct {
 	Phone     string `json:"phone,omitempty" example:"123456789"`
 }
 
+type Post struct {
+	ID        int       `json:"id"`
+	Username  string    `json:"username"`
+	Text      string    `json:"text"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 type Claims struct {
 	User  string `json:"user"`
 	Email string `json:"email"`
@@ -66,22 +77,28 @@ func env(key, def string) string {
 	return v
 }
 
+func initRedis() {
+	rdb = redis.NewClient(&redis.Options{
+		Addr: env("REDISCONN", "10.169.44.8:6379"),
+	})
+}
+
 func initDB() {
 	writeConn := fmt.Sprintf(
 		"postgres://%s:%s@%s:%s/%s",
 		env("PGUSER", "postgres"),
-		env("PGPASSWORD", "12345678"),
+		env("PGPASSWORD", "postgres"),
 		env("PGHOST_WRITE", "10.169.44.8"),
-		env("PGPORT_WRITE", "5432"),
+		env("PGPORT_WRITE", "5000"),
 		env("PGDBNAME", "auth"),
 	)
 
 	readConn := fmt.Sprintf(
 		"postgres://%s:%s@%s:%s/%s",
 		env("PGUSER", "postgres"),
-		env("PGPASSWORD", "12345678"),
+		env("PGPASSWORD", "postgres"),
 		env("PGHOST_READ", "10.169.44.8"),
-		env("PGPORT_READ", "5433"),
+		env("PGPORT_READ", "5001"),
 		env("PGDBNAME", "auth"),
 	)
 
@@ -95,6 +112,46 @@ func initDB() {
 	if err != nil {
 		log.Fatal(err)
 	}
+}
+
+func getFeedVersion(ctx context.Context, userID string) string {
+	version, err := rdb.Get(ctx, "feed_version:"+userID).Result()
+	if err != nil {
+		return "0"
+	}
+	return version
+}
+
+func invalidateUserAndFriendsFeed(ctx context.Context, userID string) {
+	// инвалидируем самого пользователя
+	invalidateFeed(ctx, userID)
+
+	// получаем друзей (подписчиков)
+	rows, err := dbRead.Query(`
+		SELECT user_id FROM friends WHERE friend_id=$1`,
+		userID,
+	)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var uid string
+		if err := rows.Scan(&uid); err != nil {
+			continue
+		}
+		invalidateFeed(ctx, uid)
+	}
+}
+
+func invalidateFeed(ctx context.Context, userID string) {
+	rdb.Incr(ctx, "feed_version:"+userID)
+}
+
+func invalidateTwoFeeds(ctx context.Context, u1, u2 string) {
+	invalidateFeed(ctx, u1)
+	invalidateFeed(ctx, u2)
 }
 
 func getProfile(username string) (*User, error) {
@@ -349,6 +406,313 @@ func searchUser(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(result)
 }
 
+// @Summary Add friend
+// @Tags friend
+// @Security BearerAuth
+// @Param user_id query string true "Friend user ID"
+// @Success 200
+// @Router /friend/set [post]
+func setFriend(w http.ResponseWriter, r *http.Request) {
+	claims := r.Context().Value("user").(*Claims)
+
+	friendID := r.URL.Query().Get("user_id")
+	if friendID == "" {
+		http.Error(w, "user_id required", 400)
+		return
+	}
+
+	if friendID == claims.User {
+		http.Error(w, "cannot add yourself", 400)
+		return
+	}
+
+	// INSERT (игнорируем дубликаты)
+	_, err := dbWrite.Exec(`
+		INSERT INTO friends (username, friendname)
+		VALUES ($1, $2)
+		ON CONFLICT DO NOTHING`,
+		claims.User,
+		friendID,
+	)
+
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+
+	ctx := context.Background()
+	invalidateTwoFeeds(ctx, claims.User, friendID)
+
+	w.WriteHeader(http.StatusOK)
+}
+
+// @Summary Delete friend
+// @Tags friend
+// @Security BearerAuth
+// @Param user_id query string true "Friend user ID"
+// @Success 204
+// @Router /friend/delete [delete]
+func deleteFriend(w http.ResponseWriter, r *http.Request) {
+	claims := r.Context().Value("user").(*Claims)
+
+	friendID := r.URL.Query().Get("user_id")
+	if friendID == "" {
+		http.Error(w, "user_id required", 400)
+		return
+	}
+
+	_, err := dbWrite.Exec(`
+		DELETE FROM friends
+		WHERE username=$1 AND friendname=$2`,
+		claims.User,
+		friendID,
+	)
+
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+
+	ctx := context.Background()
+	invalidateTwoFeeds(ctx, claims.User, friendID)
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// @Summary Create post
+// @Tags post
+// @Security BearerAuth
+// @Accept json
+// @Param post body Post true "Post"
+// @Success 201
+// @Router /post/create [post]
+func createPost(w http.ResponseWriter, r *http.Request) {
+	claims := r.Context().Value("user").(*Claims)
+
+	var p Post
+	json.NewDecoder(r.Body).Decode(&p)
+
+	err := dbWrite.QueryRow(`
+		INSERT INTO posts(username, text)
+		VALUES ($1, $2)
+		RETURNING id, created_at`,
+		claims.User, p.Text,
+	).Scan(&p.ID, &p.CreatedAt)
+
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+
+	ctx := context.Background()
+	invalidateUserAndFriendsFeed(ctx, claims.User)
+
+	p.Username = claims.User
+
+	json.NewEncoder(w).Encode(p)
+}
+
+// @Summary Get post
+// @Tags post
+// @Security BearerAuth
+// @Param id query int true "Post ID"
+// @Success 200 {object} Post
+// @Router /post/get [get]
+func getPost(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("id")
+
+	var p Post
+
+	err := dbRead.QueryRow(`
+		SELECT id, username, text, created_at
+		FROM posts WHERE id=$1`, id).
+		Scan(&p.ID, &p.Username, &p.Text, &p.CreatedAt)
+
+	if err != nil {
+		http.Error(w, err.Error(), 404)
+		return
+	}
+
+	json.NewEncoder(w).Encode(p)
+}
+
+// @Summary Update post
+// @Tags post
+// @Security BearerAuth
+// @Accept json
+// @Param post body Post true "Post"
+// @Success 200
+// @Router /post/update [put]
+func updatePost(w http.ResponseWriter, r *http.Request) {
+	claims := r.Context().Value("user").(*Claims)
+
+	var p Post
+	json.NewDecoder(r.Body).Decode(&p)
+
+	res, err := dbWrite.Exec(`
+		UPDATE posts
+		SET text=$1
+		WHERE id=$2 AND username=$3`,
+		p.Text, p.ID, claims.User)
+
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+
+	rows, _ := res.RowsAffected()
+	if rows == 0 {
+		http.Error(w, "not found or forbidden", 403)
+		return
+	}
+
+	ctx := context.Background()
+	invalidateUserAndFriendsFeed(ctx, claims.User)
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// @Summary Delete post
+// @Tags post
+// @Security BearerAuth
+// @Param id query int true "Post ID"
+// @Success 204
+// @Router /post/delete [delete]
+func deletePost(w http.ResponseWriter, r *http.Request) {
+	claims := r.Context().Value("user").(*Claims)
+	id := r.URL.Query().Get("id")
+
+	res, err := dbWrite.Exec(`
+		DELETE FROM posts
+		WHERE id=$1 AND username=$2`,
+		id, claims.User)
+
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+
+	rows, _ := res.RowsAffected()
+	if rows == 0 {
+		http.Error(w, "not found or forbidden", 403)
+		return
+	}
+
+	ctx := context.Background()
+	invalidateUserAndFriendsFeed(ctx, claims.User)
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// feed godoc
+// @Summary Get user feed
+// @Description Returns paginated feed of posts from friends
+// @Tags post
+// @Security BearerAuth
+// @Produce json
+// @Param offset query int false "Offset" example(0)
+// @Param limit query int false "Limit" example(10)
+// @Success 200 {array} Post
+// @Failure 401 {string} string "Unauthorized"
+// @Failure 500 {string} string "Internal server error"
+// @Router /post/feed [get]
+func feed(w http.ResponseWriter, r *http.Request) {
+	ctx := context.Background()
+	start := time.Now()
+	claims := r.Context().Value("user").(*Claims)
+
+	// --- параметры ---
+	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+
+	if offset < 0 {
+		offset = 0
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 10
+	}
+
+	log.Printf("[feed] user=%s offset=%d limit=%d", claims.User, offset, limit)
+
+	// --- version ---
+	version := getFeedVersion(ctx, claims.User)
+
+	// --- cache key ---
+	cacheKey := fmt.Sprintf("feed:%s:%s:%d:%d",
+		claims.User, version, offset, limit)
+
+	// --- 1️⃣ пробуем Redis ---
+	cached, err := rdb.Get(ctx, cacheKey).Result()
+	if err == nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(cached))
+		log.Printf("[feed] total took with Redis only=%s", time.Since(start))
+		return
+	}
+
+	log.Printf("[feed] cache MISS key=%s", cacheKey)
+
+	// --- 2️⃣ защита от cache stampede ---
+	lockKey := "lock:" + cacheKey
+
+	ok, _ := rdb.SetNX(ctx, lockKey, 1, 5*time.Second).Result()
+	if !ok {
+		time.Sleep(50 * time.Millisecond)
+		feed(w, r)
+		return
+	}
+	defer rdb.Del(ctx, lockKey)
+
+	dbStart := time.Now()
+
+	// --- 3️⃣ запрос в БД ---
+	rows, err := dbRead.Query(`
+		SELECT p.id, p.username, p.text, p.created_at
+		FROM posts p
+		JOIN friends f ON f.friendname = p.username
+		WHERE f.username = $1
+		ORDER BY p.created_at DESC
+		LIMIT $2 OFFSET $3`,
+		claims.User,
+		limit,
+		offset,
+	)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	defer rows.Close()
+
+	var posts []Post
+
+	for rows.Next() {
+		var p Post
+		err := rows.Scan(&p.ID, &p.Username, &p.Text, &p.CreatedAt)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		posts = append(posts, p)
+	}
+
+	log.Printf("[feed] db query took=%s", time.Since(dbStart))
+
+	// --- 4️⃣ сериализация ---
+	data, _ := json.Marshal(posts)
+
+	// --- 5️⃣ кешируем ---
+	err = rdb.Set(ctx, cacheKey, data, 30*time.Second).Err()
+	if err != nil {
+		log.Printf("[feed] redis set error: %v", err)
+	}
+
+	// --- 6️⃣ ответ ---
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(data)
+
+	log.Printf("[feed] total took with DB=%s", time.Since(start))
+}
+
 // login godoc
 // @Summary Login user
 // @Tags auth
@@ -399,6 +763,8 @@ func main() {
 
 	initDB()
 
+	initRedis()
+
 	r := mux.NewRouter()
 
 	r.HandleFunc("/", hello).Methods("GET")
@@ -412,10 +778,17 @@ func main() {
 	//	r.HandleFunc("/user/update/{username}", tokenRequired(updateUser)).Methods("PUT")
 	r.HandleFunc("/user/register", tokenRequired(createUser)).Methods("POST")
 
+	r.HandleFunc("/friend/set", tokenRequired(setFriend)).Methods("POST")
+	r.HandleFunc("/friend/delete", tokenRequired(deleteFriend)).Methods("DELETE")
+	r.HandleFunc("/post/create", tokenRequired(createPost)).Methods("POST")
+	r.HandleFunc("/post/get", tokenRequired(getPost)).Methods("GET")
+	r.HandleFunc("/post/update", tokenRequired(updatePost)).Methods("PUT")
+	r.HandleFunc("/post/delete", tokenRequired(deletePost)).Methods("DELETE")
+	r.HandleFunc("/post/feed", tokenRequired(feed)).Methods("GET")
+
 	// Swagger UI
 	r.PathPrefix("/swagger/").Handler(httpSwagger.WrapHandler)
 
 	log.Println("Server started :8000")
 	log.Fatal(http.ListenAndServe(":8000", r))
 }
-
