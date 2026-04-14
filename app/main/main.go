@@ -156,8 +156,11 @@ func invalidateTwoFeeds(ctx context.Context, u1, u2 string) {
 
 func getProfile(username string) (*User, error) {
 	row := dbRead.QueryRow(`
-		SELECT password, email, phone
-		FROM users WHERE username=$1`, username)
+		SELECT
+			password,
+			COALESCE(email, ''),
+			COALESCE(phone, '')
+			FROM users WHERE username=$1`, username)
 
 	u := &User{Username: username}
 	err := row.Scan(&u.Password, &u.Email, &u.Phone)
@@ -217,11 +220,20 @@ func getUser(w http.ResponseWriter, r *http.Request) {
 	username := mux.Vars(r)["username"]
 
 	row := dbRead.QueryRow(`
-		SELECT username,firstname,lastname,email,phone,biography,birthdate,city,gender
+		SELECT 
+			username,
+			firstname,
+			lastname,
+			COALESCE(email, ''),
+			COALESCE(birthdate, ''),
+			COALESCE(biography, ''),
+			COALESCE(city, ''),
+			COALESCE(phone, '')
+			COALESCE(gender, '')
 		FROM users WHERE username=$1`, username)
 
 	var u User
-	err := row.Scan(&u.Username, &u.FirstName, &u.LastName, &u.Email, &u.Phone, &u.Biography, &u.Birthdate, &u.City, &u.Gender)
+	err := row.Scan(&u.Username, &u.FirstName, &u.LastName, &u.Email, &u.Birthdate, &u.Biography, &u.City, &u.Phone, &u.Gender)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
