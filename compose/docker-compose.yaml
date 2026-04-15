@@ -17,6 +17,22 @@ services:
 
         ports:
           - "8000:8000"
+    mesenger:
+        image: docker.io/slexxa/otus_hl_mesenger:v0.0.1
+        container_name: main
+        restart: unless-stopped
+        environment:
+          PGHOST_WRITE: "haproxy"
+          PGPORT_WRITE: "5000"
+          PGHOST_READ: "haproxy"
+          PGPORT_READ: "5001"
+          PGUSER: "postgres"
+          PGPASSWORD: "postgres"
+          PGDBNAME: "auth"
+          REDISCONN: "redis:6379"
+
+        ports:
+          - "8000:8000"
 
     redis:
         image: redis:6.2.6-alpine
