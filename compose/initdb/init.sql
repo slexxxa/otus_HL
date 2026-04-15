@@ -92,3 +92,18 @@ ON friends(username);
 
 ALTER TABLE friends
 ADD CONSTRAINT unique_friend UNIQUE (username, friendname);
+
+CREATE TABLE messages (
+    id SERIAL PRIMARY KEY,
+    from_user TEXT NOT NULL,
+    to_user TEXT NOT NULL,
+    text TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT now()
+);
+
+CREATE INDEX idx_dialog
+ON messages (
+    LEAST(from_user, to_user),
+    GREATEST(from_user, to_user),
+    created_at
+);
