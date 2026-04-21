@@ -94,8 +94,8 @@ func getDialog(w http.ResponseWriter, r *http.Request) {
 	rows, err := dbRead.Query(`
 		SELECT id, from_user, to_user, text, created_at
 		FROM messages
-		WHERE LEAST(from_user, to_user) = LEAST($1, $2)
-		  AND GREATEST(from_user, to_user) = GREATEST($1, $2)
+		WHERE from_user =$1
+		AND to_user = $2
 		ORDER BY created_at ASC
 	`, claims.User, user2)
 
