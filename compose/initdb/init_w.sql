@@ -1,0 +1,4 @@
+CREATE DATABASE auth;
+\c auth
+CREATE EXTENSION citus;
+

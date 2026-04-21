@@ -4,7 +4,6 @@ set -e
 apt update
 apt install -y curl jq vim
 
-NODES=("patroni1" "patroni2" "patroni3")
 API_PORT=8008
 
 echo "Searching for Patroni leader..."
@@ -21,7 +20,19 @@ get_leader() {
   done
 }
 
+### запуск скрипта на первой worker node ###
+echo "Запуск миграции для первого воркера"
+echo "|"
+echo "|"
+echo "|"
+echo "|"
+echo "|"
+echo "|"
+echo "|"
+echo "|"
+echo "|"
 LEADER=""
+NODES=("patroni-w1" "patroni-w2")
 
 until [ -n "$LEADER" ]; do
   get_leader
@@ -29,9 +40,10 @@ until [ -n "$LEADER" ]; do
   sleep 2
 done
 
-echo "Leader detected: $LEADER"
+echo "worker detected: $LEADER"
 
 export PGHOST=$LEADER
+w1=$LEADER
 export PGUSER=postgres
 export PGPASSWORD=postgres
 export PGPORT=5432
@@ -42,8 +54,93 @@ until pg_isready; do
   sleep 2
 done
 
-echo "Running init.sql"
+echo "Running init_w.sql"
 
-psql -f /initdb/init.sql
+psql -f /initdb/init_w.sql
+
+echo "|"
+echo "|"
+echo "|"
+echo "|"
+echo "|"
+echo "|"
+echo "|"
+echo "|"
+echo "|"
+### запуск скрипта на второй worker node ###
+echo "Запуск миграции для второго воркера"
+echo "|"
+echo "|"
+echo "|"
+echo "|"
+echo "|"
+echo "|"
+echo "|"
+echo "|"
+echo "|"
+NODES=("patroni-w3" "patroni-w4")
+LEADER=""
+until [ -n "$LEADER" ]; do
+  get_leader
+  echo "Leader: $LEADER"
+  sleep 2
+done
+
+echo "worker2 detected: $LEADER"
+export PGHOST=$LEADER
+w2=$LEADER
+echo "Waiting postgres..."
+until pg_isready; do
+  sleep 2
+done
+echo "Running init_w.sql"
+psql -f /initdb/init_w.sql
+
+echo "|"
+echo "|"
+echo "|"
+echo "|"
+echo "|"
+echo "|"
+echo "|"
+echo "|"
+echo "|"
+### запуск скрипта на координаторе node ###
+echo "Запуск миграции для координатора"
+echo "|"
+echo "|"
+echo "|"
+echo "|"
+echo "|"
+echo "|"
+echo "|"
+echo "|"
+echo "|"
+NODES=("patroni-c1" "patroni-c2")
+LEADER=""
+until [ -n "$LEADER" ]; do
+  get_leader
+  echo "Leader: $LEADER"
+  sleep 2
+done
+echo "leader detected: $LEADER"
+export PGHOST=$LEADER
+c=$LEADER
+echo "Waiting postgres..."
+until pg_isready; do
+  sleep 2
+done
+echo "Running init.sql"
+psql -v w1=${w1} -v w2=${w2} -v c=${c} -f /initdb/init.sql
+
+echo "|"
+echo "|"
+echo "|"
+echo "|"
+echo "|"
+echo "|"
+echo "|"
+echo "|"
+echo "|"
 
 echo "Init completed"

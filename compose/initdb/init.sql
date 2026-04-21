@@ -1,5 +1,11 @@
 CREATE DATABASE auth;
 \c auth
+CREATE EXTENSION citus;
+
+SELECT citus_set_coordinator_host(:'c', 5432);
+SELECT * FROM citus_add_node(:'w1', 5432);
+SELECT * FROM citus_add_node(:'w2', 5432);
+
 CREATE TABLE users (
    id bigserial primary key,
    username varchar(50) UNIQUE,
@@ -94,11 +100,12 @@ ALTER TABLE friends
 ADD CONSTRAINT unique_friend UNIQUE (username, friendname);
 
 CREATE TABLE messages (
-    id SERIAL PRIMARY KEY,
+    id BIGSERIAL,
     from_user TEXT NOT NULL,
     to_user TEXT NOT NULL,
     text TEXT NOT NULL,
-    created_at TIMESTAMP DEFAULT now()
+    created_at TIMESTAMP DEFAULT now(),
+    PRIMARY KEY (from_user, id)
 );
 
 CREATE INDEX idx_dialog
@@ -107,3 +114,6 @@ ON messages (
     GREATEST(from_user, to_user),
     created_at
 );
+
+SELECT create_distributed_table('messages', 'from_user');
+
