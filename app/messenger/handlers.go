@@ -94,8 +94,8 @@ func getDialog(w http.ResponseWriter, r *http.Request) {
 	rows, err := dbRead.Query(`
 		SELECT id, from_user, to_user, text, created_at
 		FROM messages
-		WHERE from_user =$1
-		AND to_user = $2
+		WHERE from_user =$2
+		AND to_user = $1
 		ORDER BY created_at ASC
 	`, claims.User, user2)
 
