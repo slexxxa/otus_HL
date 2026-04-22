@@ -14,6 +14,7 @@ services:
           PGPASSWORD: "postgres"
           PGDBNAME: "auth"
           REDISCONN: "redis:6379"
+          KAFKA_ADDR: "kafka:9092"
 
         ports:
           - "8000:8000"
