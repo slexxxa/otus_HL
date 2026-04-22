@@ -1,5 +1,23 @@
 basePath: /
 definitions:
+  main.Body:
+    properties:
+      text:
+        type: string
+    type: object
+  main.Message:
+    properties:
+      created_at:
+        type: string
+      from_user:
+        type: string
+      id:
+        type: integer
+      text:
+        type: string
+      to_user:
+        type: string
+    type: object
   main.Post:
     properties:
       created_at:
@@ -60,6 +78,52 @@ paths:
       summary: Hello endpoint
       tags:
       - system
+  /dialog/{user_id}/list:
+    get:
+      parameters:
+      - description: User
+        in: path
+        name: user_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/main.Message'
+            type: array
+      security:
+      - BearerAuth: []
+      summary: Get dialog
+      tags:
+      - dialog
+  /dialog/{user_id}/send:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Receiver
+        in: path
+        name: user_id
+        required: true
+        type: string
+      - description: text
+        in: body
+        name: message
+        required: true
+        schema:
+          $ref: '#/definitions/main.Body'
+      responses:
+        "200":
+          description: OK
+      security:
+      - BearerAuth: []
+      summary: Send message
+      tags:
+      - dialog
   /friend/delete:
     delete:
       parameters:
@@ -189,6 +253,13 @@ paths:
       summary: Get user feed
       tags:
       - post
+  /post/feed/posted:
+    get:
+      description: Use ws://host/post/feed/posted
+      responses: {}
+      summary: WebSocket endpoint for realtime posts
+      tags:
+      - websocket
   /post/get:
     get:
       parameters:

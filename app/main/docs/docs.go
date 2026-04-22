@@ -28,6 +28,81 @@ const docTemplate = `{
                 }
             }
         },
+        "/dialog/{user_id}/list": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "dialog"
+                ],
+                "summary": "Get dialog",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "User",
+                        "name": "user_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/main.Message"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/dialog/{user_id}/send": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "tags": [
+                    "dialog"
+                ],
+                "summary": "Send message",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Receiver",
+                        "name": "user_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "text",
+                        "name": "message",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/main.Body"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    }
+                }
+            }
+        },
         "/friend/delete": {
             "delete": {
                 "security": [
@@ -240,6 +315,16 @@ const docTemplate = `{
                 }
             }
         },
+        "/post/feed/posted": {
+            "get": {
+                "description": "Use ws://host/post/feed/posted",
+                "tags": [
+                    "websocket"
+                ],
+                "summary": "WebSocket endpoint for realtime posts",
+                "responses": {}
+            }
+        },
         "/post/get": {
             "get": {
                 "security": [
@@ -433,6 +518,34 @@ const docTemplate = `{
         }
     },
     "definitions": {
+        "main.Body": {
+            "type": "object",
+            "properties": {
+                "text": {
+                    "type": "string"
+                }
+            }
+        },
+        "main.Message": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "from_user": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "text": {
+                    "type": "string"
+                },
+                "to_user": {
+                    "type": "string"
+                }
+            }
+        },
         "main.Post": {
             "type": "object",
             "properties": {

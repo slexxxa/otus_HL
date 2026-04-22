@@ -2,7 +2,7 @@ version: "3.9"
 
 services:
     main:
-        image: docker.io/slexxa/otus_hl_main:v0.0.8
+        image: docker.io/slexxa/otus_hl_main:v0.0.9
         container_name: main
         restart: unless-stopped
         environment:

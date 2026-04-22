@@ -20,19 +20,23 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	_ "HL/docs"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/mux"
+	"github.com/gorilla/websocket"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
+	"github.com/segmentio/kafka-go"
 	httpSwagger "github.com/swaggo/http-swagger"
 )
 
 var rdb *redis.Client
+var kafkaWriter *kafka.Writer
 
 var (
 	dbWrite    *sql.DB
@@ -40,6 +44,24 @@ var (
 	secretKey  = []byte("jndsifhvusdkhbfjdsfbgljdbgfvljdsgvjld")
 	billingURL string
 )
+
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool { return true },
+}
+
+var wsUsers = map[string][]*websocket.Conn{}
+var wsMu sync.Mutex
+
+type PostCreatedEvent struct {
+	Username  string `json:"username"`
+	Text      string `json:"text"`
+	CreatedAt int64  `json:"created_at"`
+}
+
+type Client struct {
+	User string
+	Conn *websocket.Conn
+}
 
 type User struct {
 	ID        string
@@ -56,10 +78,10 @@ type User struct {
 }
 
 type Post struct {
-	ID        int       `json:"id"`
-	Username  string    `json:"username"`
-	Text      string    `json:"text"`
-	CreatedAt time.Time `json:"created_at"`
+	ID        int    `json:"id"`
+	Username  string `json:"username"`
+	Text      string `json:"text"`
+	CreatedAt string `json:"created_at"`
 }
 
 type Claims struct {
@@ -77,9 +99,53 @@ func env(key, def string) string {
 	return v
 }
 
+func savePost(e PostCreatedEvent) Post {
+	var p Post
+
+	_ = dbWrite.QueryRow(`
+		INSERT INTO posts(username, text, created_at)
+		VALUES ($1, $2, to_timestamp($3))
+		RETURNING id, username, text, created_at
+	`,
+		e.Username,
+		e.Text,
+		e.CreatedAt,
+	).Scan(&p.ID, &p.Username, &p.Text, &p.CreatedAt)
+
+	return p
+}
+
 func initRedis() {
 	rdb = redis.NewClient(&redis.Options{
 		Addr: env("REDISCONN", "10.169.44.8:6379"),
+	})
+}
+
+func initKafka() {
+	kafkaAddr := env("KAFKA_ADDR", "kafka")
+	kafkaTopic := env("KAFKA_TOPIC", "posts.created")
+	kafkaWriter = &kafka.Writer{
+		Addr:     kafka.TCP(kafkaAddr),
+		Topic:    kafkaTopic,
+		Balancer: &kafka.LeastBytes{},
+	}
+}
+
+func ensureTopic() error {
+	kafkaAddr := env("KAFKA_ADDR", "10.169.44.8:9092")
+	log.Println("ensure topic kafkaAddr:", kafkaAddr)
+	conn, err := kafka.Dial("tcp", kafkaAddr)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	topic := env("KAFKA_TOPIC", "posts.created")
+
+	return conn.CreateTopics(kafka.TopicConfig{
+		Topic:             topic,
+		NumPartitions:     1,
+		ReplicationFactor: 1,
 	})
 }
 
@@ -174,6 +240,12 @@ func tokenRequired(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 
 		tokenStr := r.Header.Get("token")
+
+		//fallback на query param
+		if tokenStr == "" {
+			tokenStr = r.URL.Query().Get("token")
+		}
+
 		if tokenStr == "" {
 			http.Error(w, "token is missing", 403)
 			return
@@ -499,29 +571,90 @@ func deleteFriend(w http.ResponseWriter, r *http.Request) {
 // @Success 201
 // @Router /post/create [post]
 func createPost(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	claims := r.Context().Value("user").(*Claims)
 
-	var p Post
-	json.NewDecoder(r.Body).Decode(&p)
+	var req struct {
+		Text string `json:"text"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
 
-	err := dbWrite.QueryRow(`
-		INSERT INTO posts(username, text)
-		VALUES ($1, $2)
-		RETURNING id, created_at`,
-		claims.User, p.Text,
-	).Scan(&p.ID, &p.CreatedAt)
+	log.Printf("[POST] user=%s text=%s", claims.User, req.Text)
 
+	event := PostCreatedEvent{
+		Username:  claims.User,
+		Text:      req.Text,
+		CreatedAt: time.Now().Unix(),
+	}
+
+	data, err := json.Marshal(event)
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		log.Printf("[POST][ERROR] marshal: %v", err)
+		http.Error(w, "internal error", 500)
 		return
 	}
 
-	ctx := context.Background()
-	invalidateUserAndFriendsFeed(ctx, claims.User)
+	err = kafkaWriter.WriteMessages(r.Context(),
+		kafka.Message{
+			Key:   []byte(claims.User),
+			Value: data,
+		},
+	)
 
-	p.Username = claims.User
+	if err != nil {
+		log.Printf("[KAFKA][ERROR] write message: %v", err)
+		http.Error(w, "kafka error", 500)
+		return
+	}
 
-	json.NewEncoder(w).Encode(p)
+	log.Printf("[KAFKA] sent user=%s took=%s", claims.User, time.Since(start))
+
+	w.WriteHeader(http.StatusAccepted)
+}
+
+func startConsumer() {
+	brokers := strings.Split(env("KAFKA_ADDR", "kafka"), ",")
+	topic := env("KAFKA_TOPIC", "posts.created")
+	groupID := env("KAFKA_GROUP", "post-writer")
+
+	r := kafka.NewReader(kafka.ReaderConfig{
+		Brokers: brokers,
+		Topic:   topic,
+		GroupID: groupID,
+	})
+
+	log.Printf("[KAFKA] consumer started topic=%s group=%s brokers=%v",
+		topic, groupID, brokers)
+
+	for {
+		msg, err := r.ReadMessage(context.Background())
+		if err != nil {
+			log.Printf("[KAFKA][ERROR] read: %v", err)
+			continue
+		}
+
+		log.Printf("[KAFKA] received key=%s offset=%d", string(msg.Key), msg.Offset)
+
+		var e PostCreatedEvent
+		if err := json.Unmarshal(msg.Value, &e); err != nil {
+			log.Printf("[KAFKA][ERROR] unmarshal: %v", err)
+			continue
+		}
+
+		log.Printf("[DB] saving post user=%s text=%s", e.Username, e.Text)
+
+		p := savePost(e)
+
+		log.Printf("[DB] saved post id=%d user=%s", p.ID, p.Username)
+
+		log.Printf("[WS] broadcasting post id=%d", p.ID)
+
+		go func(p Post) {
+			start := time.Now()
+			broadcastPostToFriends(p)
+			log.Printf("[WS] broadcast done post_id=%d took=%s", p.ID, time.Since(start))
+		}(p)
+	}
 }
 
 // @Summary Get post
@@ -725,6 +858,81 @@ func feed(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[feed] total took with DB=%s", time.Since(start))
 }
 
+// @Summary WebSocket endpoint for realtime posts
+// @Description Use ws://host/post/feed/posted
+// @Tags websocket
+// @Router /post/feed/posted [get]
+func wsFeedPosted(w http.ResponseWriter, r *http.Request) {
+	claims := r.Context().Value("user").(*Claims)
+
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		return
+	}
+
+	wsMu.Lock()
+	wsUsers[claims.User] = append(wsUsers[claims.User], conn)
+	wsMu.Unlock()
+
+	log.Printf("[ws] connected user=%s", claims.User)
+
+	for {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			break
+		}
+	}
+
+	removeConn(claims.User, conn)
+	conn.Close()
+}
+
+func removeConn(user string, target *websocket.Conn) {
+	wsMu.Lock()
+	defer wsMu.Unlock()
+
+	list := wsUsers[user]
+	var out []*websocket.Conn
+
+	for _, c := range list {
+		if c != target {
+			out = append(out, c)
+		}
+	}
+
+	wsUsers[user] = out
+}
+
+func broadcastPostToFriends(p Post) {
+
+	rows, err := dbRead.Query(`
+		SELECT username
+		FROM friends
+		WHERE friendname = $1
+	`, p.Username)
+
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	data, _ := json.Marshal(p)
+
+	for rows.Next() {
+		var friend string
+		rows.Scan(&friend)
+
+		wsMu.Lock()
+		conns := wsUsers[friend]
+		wsMu.Unlock()
+
+		for _, conn := range conns {
+			go func(c *websocket.Conn) {
+				_ = c.WriteMessage(websocket.TextMessage, data)
+			}(conn)
+		}
+	}
+}
+
 // login godoc
 // @Summary Login user
 // @Tags auth
@@ -775,6 +983,14 @@ func main() {
 
 	initDB()
 
+	initKafka()
+
+	if err := ensureTopic(); err != nil {
+		log.Println("topic init error:", err)
+	}
+
+	go startConsumer()
+
 	initRedis()
 
 	r := mux.NewRouter()
@@ -797,6 +1013,11 @@ func main() {
 	r.HandleFunc("/post/update", tokenRequired(updatePost)).Methods("PUT")
 	r.HandleFunc("/post/delete", tokenRequired(deletePost)).Methods("DELETE")
 	r.HandleFunc("/post/feed", tokenRequired(feed)).Methods("GET")
+
+	r.HandleFunc("/post/feed/posted", tokenRequired(wsFeedPosted)).Methods("GET")
+	r.HandleFunc("/ws-test", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/static/ws-test.html", 302) })
+
+	r.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir("./static"))))
 
 	// Swagger UI
 	r.PathPrefix("/swagger/").Handler(httpSwagger.WrapHandler)

@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html>
+<body>
+<h2>Live Feed</h2>
+
+<div>
+  Login: <input id="login" value="alex"><br><br>
+  Password: <input id="password" type="password" value="123"><br><br>
+
+  <button onclick="connect()">Connect</button>
+</div>
+
+<hr>
+
+<pre id="log"></pre>
+
+<script>
+let ws = null;
+
+function log(msg) {
+  document.getElementById("log").textContent += msg + "\n";
+}
+
+async function connect() {
+  const login = document.getElementById("login").value;
+  const password = document.getElementById("password").value;
+
+  log("LOGIN...");
+
+const auth = btoa(unescape(encodeURIComponent(login + ":" + password)));
+  const resp = await fetch("/login", {
+    method: "POST",
+    headers: {
+      "Authorization": "Basic " + auth
+    }
+  });
+
+  if (!resp.ok) {
+    log("LOGIN FAILED");
+    return;
+  }
+
+  const data = await resp.json();
+  const token = data.token;
+
+  log("TOKEN OK");
+
+  if (ws) ws.close();
+
+  ws = new WebSocket(
+    "ws://" + location.host + "/post/feed/posted?token=" + token
+  );
+
+  ws.onopen = () => log("CONNECTED");
+
+  ws.onmessage = (e) => {
+    log("POST: " + e.data);
+  };
+
+  ws.onclose = () => log("DISCONNECTED");
+
+  ws.onerror = () => log("ERROR");
+}
+</script>
+</body>
+</html>
