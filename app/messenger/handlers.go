@@ -46,10 +46,19 @@ func sendMessage(w http.ResponseWriter, r *http.Request) {
 
 	json.NewDecoder(r.Body).Decode(&b)
 
-	_, err := dbWrite.Exec(`
-		INSERT INTO messages (from_user, to_user, text)
-		VALUES ($1, $2, $3)
-	`, claims.User, toUser, b.Text)
+	// _, err := dbWrite.Exec(`
+	// 	INSERT INTO messages (from_user, to_user, text)
+	// 	VALUES ($1, $2, $3)
+	// `, claims.User, toUser, b.Text)
+
+	_, err := rdb.FCall(
+		ctx,
+		"send_message",
+		[]string{},
+		claims.User,
+		toUser,
+		b.Text,
+	).Result()
 
 	if err != nil {
 		http.Error(w, err.Error(), 500)
@@ -90,26 +99,42 @@ func getDialog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// --- 2️⃣ DB ---
-	rows, err := dbRead.Query(`
-		SELECT id, from_user, to_user, text, created_at
-		FROM messages
-		WHERE from_user =$2
-		AND to_user = $1
-		ORDER BY created_at ASC
-	`, claims.User, user2)
+	// // --- 2️⃣ DB ---
+	// rows, err := dbRead.Query(`
+	// 	SELECT id, from_user, to_user, text, created_at
+	// 	FROM messages
+	// 	WHERE from_user =$2
+	// 	AND to_user = $1
+	// 	ORDER BY created_at ASC
+	// `, claims.User, user2)
+
+	res, err := rdb.FCall(
+		ctx,
+		"get_dialog",
+		[]string{},
+		claims.User,
+		user2,
+	).Result()
 
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	defer rows.Close()
+	// defer rows.Close()
+
+	raw := res.([]interface{})
 
 	var messages []Message
 
-	for rows.Next() {
+	// for rows.Next() {
+	// 	var m Message
+	// 	rows.Scan(&m.ID, &m.FromUser, &m.ToUser, &m.Text, &m.CreatedAt)
+	// 	messages = append(messages, m)
+	// }
+
+	for _, item := range raw {
 		var m Message
-		rows.Scan(&m.ID, &m.FromUser, &m.ToUser, &m.Text, &m.CreatedAt)
+		json.Unmarshal([]byte(item.(string)), &m)
 		messages = append(messages, m)
 	}
 
@@ -121,3 +146,4 @@ func getDialog(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
 }
+

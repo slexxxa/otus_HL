@@ -19,7 +19,7 @@ services:
         ports:
           - "8000:8000"
     mesenger:
-        image: docker.io/slexxa/otus_hl_mesenger:v0.0.3
+        image: docker.io/slexxa/otus_hl_mesenger:v0.0.4
         container_name: mesenger
         restart: unless-stopped
         environment:
