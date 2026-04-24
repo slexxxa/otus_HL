@@ -2,7 +2,11 @@
 set -e
 
 apt update
-apt install -y curl jq vim
+apt install -y curl jq vim redis-tools
+
+echo "start redis migrate"
+
+cat /initdb/dialog.lua | redis-cli -h redis -x FUNCTION LOAD REPLACE
 
 API_PORT=8008
 
